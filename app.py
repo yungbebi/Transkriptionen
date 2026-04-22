@@ -1,30 +1,34 @@
 from __future__ import annotations
 
 import html
-import os
 import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 
 AUDIO_DIR = Path("audio")
 TRANSCRIPTS_DIR = Path("transcripts")
 
 
-def page() -> str:
+def audio_files() -> list[Path]:
     AUDIO_DIR.mkdir(exist_ok=True)
+    return sorted(AUDIO_DIR.glob("*.mp4"))
+
+
+def page() -> str:
     TRANSCRIPTS_DIR.mkdir(exist_ok=True)
     rows: list[str] = []
-    for mp4 in sorted(AUDIO_DIR.glob("*.mp4")):
+    for idx, mp4 in enumerate(audio_files()):
         transcript = TRANSCRIPTS_DIR / f"{mp4.stem}.md"
-        link = f'<a href="/{transcript.as_posix()}">transcript</a>' if transcript.exists() else "-"
+        link = f'<a href="/transcript?id={idx}">transcript</a>' if transcript.exists() else "-"
         rows.append(
             "<tr>"
             f"<td>{html.escape(mp4.name)}</td>"
             "<td>"
             '<form method="post" action="/run">'
-            f'<input type="hidden" name="file" value="{html.escape(mp4.name)}">'
+            f'<input type="hidden" name="id" value="{idx}">'
             '<label><input type="checkbox" name="force" value="1"> force</label> '
             '<button type="submit">transcribe</button>'
             "</form>"
@@ -44,7 +48,8 @@ def page() -> str:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
             body = page().encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -52,17 +57,23 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        file_path = Path(self.path.lstrip("/"))
-        transcripts_root = TRANSCRIPTS_DIR.resolve()
-        candidate = file_path.resolve()
-        if str(candidate).startswith(str(transcripts_root) + os.sep) and candidate.is_file():
-            body = candidate.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/markdown; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+        if parsed.path == "/transcript":
+            query = parse_qs(parsed.query)
+            try:
+                idx = int(query.get("id", [""])[0])
+            except ValueError:
+                idx = -1
+            files = audio_files()
+            if 0 <= idx < len(files):
+                candidate = TRANSCRIPTS_DIR / f"{files[idx].stem}.md"
+                if candidate.is_file():
+                    body = candidate.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
         self.send_response(404)
         self.end_headers()
 
@@ -73,13 +84,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         form = parse_qs(self.rfile.read(length).decode("utf-8"))
-        file_name = Path(form.get("file", [""])[0]).name
-        audio_path = AUDIO_DIR / file_name
-        if audio_path.suffix == ".mp4" and audio_path.exists():
+        try:
+            idx = int(form.get("id", [""])[0])
+        except ValueError:
+            idx = -1
+        files = audio_files()
+        if 0 <= idx < len(files):
+            audio_path = files[idx]
             cmd = ["poetry", "run", "python", "transcribe.py", str(audio_path)]
             if "force" in form:
                 cmd.append("--force")
-            subprocess.run(cmd, check=False)
+            try:
+                result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=3600)
+                if result.returncode != 0:
+                    print(f"transcription failed for {audio_path.name}", file=sys.stderr)
+                    if result.stdout.strip():
+                        print(f"stdout: {result.stdout.strip()}", file=sys.stderr)
+                    print(
+                        f"stderr: {result.stderr.strip() or f'No stderr output (exit code {result.returncode})'}",
+                        file=sys.stderr,
+                    )
+            except subprocess.TimeoutExpired:
+                print(f"transcription timed out for {audio_path.name}", file=sys.stderr)
         self.send_response(303)
         self.send_header("Location", "/")
         self.end_headers()

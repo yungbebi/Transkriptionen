@@ -7,9 +7,9 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-whisperx = "*"
-torch = "*"
-torchaudio = "*"
+torch = ">=2,<3"
+torchaudio = ">=2,<3"
+whisperx = ">=3,<4"
 
 [build-system]
 requires = ["poetry-core"]

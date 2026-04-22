@@ -4,6 +4,8 @@ Minimal local macOS-first transcription tool that turns `audio/*.mp4` into MAXQD
 
 ## Setup
 
+If you are creating this setup from scratch, these are the exact commands:
+
 ```bash
 mise use -g python@3.11
 poetry init -n
@@ -11,10 +13,18 @@ poetry add whisperx torch torchaudio
 brew install ffmpeg
 ```
 
-Then install project dependencies:
+`mise` is a lightweight runtime/version manager used here to pin Python 3.11.
+
+For this repository, install dependencies with:
 
 ```bash
 poetry install
+```
+
+Set a Hugging Face token for diarization:
+
+```bash
+export HF_TOKEN=your_hf_token
 ```
 
 ## Run the local UI

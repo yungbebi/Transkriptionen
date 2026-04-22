@@ -9,7 +9,7 @@ import whisperx
 
 
 def format_ts(seconds: float) -> str:
-    total = max(0, int(seconds))
+    total = max(0, int(round(seconds)))
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
@@ -21,14 +21,17 @@ def normalize_and_merge(segments: list[dict]) -> list[dict]:
 
     for seg in segments:
         raw_speaker = seg.get("speaker") or "Unknown"
-        speaker = speaker_map.setdefault(raw_speaker, f"Speaker {len(speaker_map) + 1}")
+        speaker = speaker_map.get(raw_speaker)
+        if speaker is None:
+            speaker = f"Speaker {len(speaker_map) + 1}"
+            speaker_map[raw_speaker] = speaker
         text = (seg.get("text") or "").strip()
         if not text:
             continue
         start = float(seg.get("start", 0.0))
         end = float(seg.get("end", start))
         if normalized and normalized[-1]["speaker"] == speaker:
-            normalized[-1]["end"] = max(normalized[-1]["end"], end)
+            normalized[-1]["end"] = end
             normalized[-1]["text"] = f"{normalized[-1]['text']} {text}".strip()
             continue
         normalized.append({"speaker": speaker, "start": start, "end": end, "text": text})
@@ -46,7 +49,12 @@ def transcribe_file(input_path: Path) -> list[dict]:
     model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
     result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
 
-    diarize_model = whisperx.DiarizationPipeline(use_auth_token=os.getenv("HF_TOKEN"), device=device)
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        raise RuntimeError(
+            "HF_TOKEN is required for diarization. Set it with: export HF_TOKEN=your_token"
+        )
+    diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
     diarize_segments = diarize_model(audio)
     result = whisperx.assign_word_speakers(diarize_segments, result)
 
