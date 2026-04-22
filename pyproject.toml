@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "transkriptionen"
+version = "0.1.0"
+description = "Local WhisperX transcription + diarization to Markdown"
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+whisperx = "*"
+torch = "*"
+torchaudio = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
