@@ -7,3 +7,4 @@ audio/**
 !audio/.gitkeep
 transcripts/**
 !transcripts/.gitkeep
+**/.DS_Store

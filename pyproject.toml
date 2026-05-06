@@ -9,9 +9,10 @@ readme = "README.md"
 python = "^3.10"
 torch = ">=2,<3"
 torchaudio = ">=2,<3"
-whisperx = ">=3,<4"
+mlx-whisper = ">=0.1.0"
+pyannote-audio = ">=3.1"
 flask = "^3.0"
-ffmpeg-python = "^0.2"
+ffmpeg = "*"
 
 [build-system]
 requires = ["poetry-core"]

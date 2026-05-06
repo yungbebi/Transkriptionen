@@ -1,44 +1,57 @@
 .PHONY: help setup install run clean kill
 
 PYTHON := .venv/bin/python
-PIP := .venv/bin/pip
-PORT := 8000
+PIP    := .venv/bin/pip
+PORT   := 8000
 
 help:
-	@echo "📝 Transkriptionen - Available commands:"
-	@echo "  make setup    - Create Python virtual environment"
+	@echo "📝 Transkriptionen"
+	@echo "  make setup    - Create Python 3.12 venv"
 	@echo "  make install  - Install dependencies"
 	@echo "  make run      - Start the web UI"
 	@echo "  make clean    - Remove venv and transcripts"
-	@echo "  make kill     - Kill process on port 8000"
+	@echo "  make kill     - Kill process on port $(PORT)"
 
 setup:
-	@echo "🔧 Creating virtual environment with Python 3.12..."
+	@echo "🔧 Creating venv..."
 	python3.12 -m venv .venv
-	@echo "✅ Virtual environment created"
+	@echo "✅ Done"
 
 install:
 	@echo "📦 Installing dependencies..."
-	$(PIP) install --upgrade pip
-	$(PIP) install flask python-dotenv
-	$(PIP) install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-	$(PIP) install git+https://github.com/m-bain/whisperx.git
-	@echo "✅ Dependencies installed"
+	$(PIP) install --upgrade pip --quiet
+	# Flask
+	$(PIP) install flask python-dotenv --quiet
+	# torch (default PyPI build includes MPS for Apple Silicon — no --index-url needed)
+	$(PIP) install torch torchaudio --quiet
+	# mlx-whisper: native Apple Silicon transcription, no CTranslate2
+	$(PIP) install mlx-whisper --quiet
+	# pyannote for speaker diarization (runs on CPU, fast enough)
+	$(PIP) install pyannote.audio --quiet
+	# ffmpeg-python for audio loading
+	$(PIP) install ffmpeg-python --quiet
+	@echo ""
+	@echo "✅ Done. Make sure you also have:"
+	@echo "   brew install ffmpeg"
+	@echo "   export HF_TOKEN=your_huggingface_token"
 
 run: kill
-	@echo "🚀 Starting Transkriptionen web UI..."
-	@echo "📂 Opening http://127.0.0.1:$(PORT)..."
+	@echo "🚀 Starting..."
 	@(sleep 2 && open "http://127.0.0.1:$(PORT)") &
-	@$(PYTHON) app.py 2>&1 | grep -v "WARNING\|GET\|POST"
+	@$(PYTHON) -W ignore app.py 2>&1 | grep --line-buffered -v \
+		-e "WARNING" -e "UserWarning" -e "FutureWarning" \
+		-e "site-packages" -e "torchcodec" -e "Lightning" \
+		-e "GET /" -e "POST /" -e "^$$" \
+		|| true
 
 kill:
 	@lsof -ti:$(PORT) | xargs kill -9 2>/dev/null || true
 	@sleep 0.5
 
 clean:
-	@echo "🧹 Cleaning up..."
+	@echo "🧹 Cleaning..."
 	@rm -rf .venv transcripts __pycache__ *.pyc
-	@echo "✅ Clean complete"
+	@echo "✅ Done"
 
 .venv:
 	python3.12 -m venv .venv
