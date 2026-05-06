@@ -152,6 +152,7 @@ def transcribe():
 
     proc = subprocess.Popen(
         cmd,
+        env={**os.environ, "HF_TOKEN": os.environ.get("HF_TOKEN", "")},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
