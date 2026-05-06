@@ -1,115 +1,256 @@
 from __future__ import annotations
 
-import html
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+import json
+import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
-
+from flask import Flask, render_template_string, request, redirect, url_for, send_file, jsonify, Response
+from collections import deque
 
 AUDIO_DIR = Path("audio")
 TRANSCRIPTS_DIR = Path("transcripts")
 
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+# Log stream
+log_queue = deque(maxlen=100)
+# Track active transcription processes
+active_processes: dict[str, subprocess.Popen] = {}
+
+
+def add_log(message: str):
+    """Add message to log queue"""
+    log_queue.append({
+        "timestamp": time.time() * 1000,
+        "message": message
+    })
+    print(f"[LOG] {message}", file=sys.stderr)
+
 
 def audio_files() -> list[Path]:
     AUDIO_DIR.mkdir(exist_ok=True)
-    return sorted(AUDIO_DIR.glob("*.mp4"))
+    return sorted(AUDIO_DIR.glob("*.mp4")) + sorted(AUDIO_DIR.glob("*.m4a")) + sorted(AUDIO_DIR.glob("*.mp3")) + sorted(AUDIO_DIR.glob("*.wav"))
 
 
-def page() -> str:
+HTML_TEMPLATE = """<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Transkriptionen</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ Transkriptionen</h1>
+        
+        <div class="dropzone" id="dropzone">
+            <p>Drag & drop audio files here</p>
+            <small>or click to browse (MP4, M4A, MP3, WAV)</small>
+            <input type="file" id="file-input" class="file-input" multiple accept=".mp4,.m4a,.mp3,.wav" />
+        </div>
+        
+        <div id="files-list" class="files-section"></div>
+        
+        <h3>Live Logs</h3>
+        <div id="logs" class="logs-container"></div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>
+"""
+
+
+@app.route("/", methods=["GET"])
+def index():
+    AUDIO_DIR.mkdir(exist_ok=True)
     TRANSCRIPTS_DIR.mkdir(exist_ok=True)
-    rows: list[str] = []
-    for idx, mp4 in enumerate(audio_files()):
-        transcript = TRANSCRIPTS_DIR / f"{mp4.stem}.md"
-        link = f'<a href="/transcript?id={idx}">transcript</a>' if transcript.exists() else "-"
-        rows.append(
-            "<tr>"
-            f"<td>{html.escape(mp4.name)}</td>"
-            "<td>"
-            '<form method="post" action="/run">'
-            f'<input type="hidden" name="id" value="{idx}">'
-            '<label><input type="checkbox" name="force" value="1"> force</label> '
-            '<button type="submit">transcribe</button>'
-            "</form>"
-            "</td>"
-            f"<td>{link}</td>"
-            "</tr>"
+    return render_template_string(HTML_TEMPLATE)
+
+
+@app.route("/files", methods=["GET"])
+def get_files():
+    AUDIO_DIR.mkdir(exist_ok=True)
+    TRANSCRIPTS_DIR.mkdir(exist_ok=True)
+    files = []
+    
+    # Get all audio files
+    audio_set = {af.stem: af for af in audio_files()}
+    
+    # Get all transcripts
+    TRANSCRIPTS_DIR.mkdir(exist_ok=True)
+    for transcript_file in sorted(TRANSCRIPTS_DIR.glob("*.md")):
+        stem = transcript_file.stem
+        audio_file = audio_set.get(stem)
+        if audio_file:
+            files.append({
+                "name": audio_file.name,
+                "has_transcript": True,
+                "size": transcript_file.stat().st_size
+            })
+            del audio_set[stem]
+    
+    # Add remaining audio files without transcripts
+    for stem, audio_file in sorted(audio_set.items()):
+        files.append({
+            "name": audio_file.name,
+            "has_transcript": False,
+            "size": audio_file.stat().st_size
+        })
+    
+    return jsonify({"files": files})
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file"})
+    
+    file = request.files["file"]
+    AUDIO_DIR.mkdir(exist_ok=True)
+    filepath = AUDIO_DIR / file.filename
+    file.save(str(filepath))
+    return jsonify({"success": True, "path": str(filepath)})
+
+
+def run_transcription(filename: str, audio_path: Path, output_path: Path):
+    """Run transcription in background thread with real-time log streaming"""
+    cmd = [sys.executable, "transcribe.py", str(audio_path), "-o", str(output_path), "--force"]
+    try:
+        add_log(f"▶️  Starting: {filename}")
+        
+        # Use Popen to stream output in real-time
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
         )
-    rows_html = "".join(rows) or '<tr><td colspan="3">No .mp4 files in audio/</td></tr>'
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Transkriptionen</title></head><body>"
-        "<h1>Transkriptionen</h1>"
-        "<table border='1' cellpadding='6'><tr><th>file</th><th>action</th><th>output</th></tr>"
-        f"{rows_html}</table>"
-        "</body></html>"
-    )
+        
+        active_processes[filename] = process
+        
+        # Read and log each line as it comes
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                line = line.strip()
+                if line and not line.startswith('2026-'):  # Skip timestamp logs
+                    add_log(line)
+        
+        process.wait()
+        
+        if filename in active_processes:
+            del active_processes[filename]
+        
+        if process.returncode == 0 and output_path.exists():
+            size = output_path.stat().st_size
+            add_log(f"✅ Success: {filename} ({size} bytes)")
+        else:
+            add_log(f"❌ Failed with exit code {process.returncode}")
+    except Exception as e:
+        if filename in active_processes:
+            del active_processes[filename]
+        add_log(f"⚠️  Exception: {str(e)[:150]}")
 
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        if parsed.path == "/":
-            body = page().encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if parsed.path == "/transcript":
-            query = parse_qs(parsed.query)
-            try:
-                idx = int(query.get("id", [""])[0])
-            except ValueError:
-                idx = -1
-            files = audio_files()
-            if 0 <= idx < len(files):
-                candidate = TRANSCRIPTS_DIR / f"{files[idx].stem}.md"
-                if candidate.is_file():
-                    body = candidate.read_bytes()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/markdown; charset=utf-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
-        self.send_response(404)
-        self.end_headers()
-
-    def do_POST(self) -> None:
-        if self.path != "/run":
-            self.send_response(404)
-            self.end_headers()
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        form = parse_qs(self.rfile.read(length).decode("utf-8"))
+@app.route("/stop/<filename>", methods=["POST"])
+def stop_transcription(filename):
+    """Stop an active transcription"""
+    if filename in active_processes:
         try:
-            idx = int(form.get("id", [""])[0])
-        except ValueError:
-            idx = -1
-        files = audio_files()
-        if 0 <= idx < len(files):
-            audio_path = files[idx]
-            cmd = ["poetry", "run", "python", "transcribe.py", str(audio_path)]
-            if "force" in form:
-                cmd.append("--force")
-            try:
-                result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=3600)
-                if result.returncode != 0:
-                    print(f"transcription failed for {audio_path.name}", file=sys.stderr)
-                    if result.stdout.strip():
-                        print(f"stdout: {result.stdout.strip()}", file=sys.stderr)
-                    print(
-                        f"stderr: {result.stderr.strip() or f'No stderr output (exit code {result.returncode})'}",
-                        file=sys.stderr,
-                    )
-            except subprocess.TimeoutExpired:
-                print(f"transcription timed out for {audio_path.name}", file=sys.stderr)
-        self.send_response(303)
-        self.send_header("Location", "/")
-        self.end_headers()
+            process = active_processes[filename]
+            process.terminate()
+            process.wait(timeout=5)
+            del active_processes[filename]
+            add_log(f"⏹️  Stopped: {filename}")
+            return jsonify({"success": True, "message": "Transcription stopped"})
+        except Exception as e:
+            add_log(f"❌ Failed to stop: {str(e)}")
+            return jsonify({"success": False, "error": str(e)})
+    return jsonify({"success": False, "error": "Not transcribing"})
+
+
+@app.route("/logs")
+def logs():
+    def event_stream():
+        # Send existing logs
+        for log in log_queue:
+            yield f"data: {json.dumps(log)}\n\n"
+        
+        # Stream new logs
+        last_seen = len(log_queue)
+        while True:
+            if len(log_queue) > last_seen:
+                for log in list(log_queue)[last_seen:]:
+                    yield f"data: {json.dumps(log)}\n\n"
+                last_seen = len(log_queue)
+            time.sleep(0.1)
+    
+    return Response(event_stream(), mimetype="text/event-stream")
+
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    data = request.get_json()
+    filename = data.get("filename")
+    
+    audio_path = AUDIO_DIR / filename
+    if not audio_path.exists():
+        return jsonify({"success": False, "error": "File not found"})
+    
+    output_path = TRANSCRIPTS_DIR / f"{audio_path.stem}.md"
+    
+    # Check if already transcribed
+    if output_path.exists():
+        return jsonify({"success": True, "message": "Already transcribed"})
+    
+    # Check if already transcribing
+    if filename in active_processes:
+        return jsonify({"success": False, "error": "Already transcribing"})
+    
+    # Start transcription in background thread (non-blocking)
+    thread = threading.Thread(target=run_transcription, args=(filename, audio_path, output_path), daemon=True)
+    thread.start()
+    
+    # Poll for file completion (with timeout)
+    import time
+    for i in range(240):  # Wait up to 4 minutes for the file to appear
+        if output_path.exists():
+            time.sleep(0.5)  # Small delay to ensure file is fully written
+            return jsonify({"success": True, "message": "Transcription complete"})
+        time.sleep(1)
+    
+    return jsonify({"success": True, "message": "Transcription started in background"})
+
+
+@app.route("/view/<filename>", methods=["GET"])
+def view_transcript(filename):
+    audio_path = AUDIO_DIR / filename
+    transcript_path = TRANSCRIPTS_DIR / f"{audio_path.stem}.md"
+    
+    if transcript_path.exists():
+        return send_file(transcript_path, mimetype="text/markdown")
+    return "Not found", 404
+
+
+@app.route("/delete", methods=["POST"])
+def delete_file():
+    """Only delete transcript (MD) files, never audio files"""
+    data = request.get_json()
+    filename = data.get("filename")
+    
+    audio_path = AUDIO_DIR / filename
+    transcript_path = TRANSCRIPTS_DIR / f"{audio_path.stem}.md"
+    
+    # Only delete the transcript, never the audio file
+    if transcript_path.exists():
+        transcript_path.unlink()
+        add_log(f"🗑️  Deleted transcript: {transcript_path.name}")
+    
+    return jsonify({"success": True})
 
 
 if __name__ == "__main__":
-    HTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
+    app.run(host="127.0.0.1", port=8000, debug=False, use_reloader=False)

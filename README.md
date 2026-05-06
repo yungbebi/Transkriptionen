@@ -4,18 +4,24 @@ Minimal local macOS-first transcription tool that turns `audio/*.mp4` into MAXQD
 
 ## Setup
 
-If you are creating this setup from scratch, these are the exact commands:
+If you are creating this setup from scratch:
 
 ```bash
-mise use -g python@3.11
-poetry init -n
-poetry add whisperx torch torchaudio
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install git+https://github.com/m-bain/whisperx.git
+pip install gradio ffmpeg-python torch torchvision torchaudio flask
 brew install ffmpeg
 ```
 
-`mise` is a lightweight runtime/version manager used here to pin Python 3.11.
-
 For this repository, install dependencies with:
+
+```bash
+pip install -r requirements.txt
+```
+
+or with Poetry:
 
 ```bash
 poetry install
@@ -27,10 +33,10 @@ Set a Hugging Face token for diarization:
 export HF_TOKEN=your_hf_token
 ```
 
-## Run the local UI
+## Run the local Web UI
 
 ```bash
-poetry run python app.py
+python app.py
 ```
 
 Open: http://localhost:8000
@@ -38,9 +44,9 @@ Open: http://localhost:8000
 ## CLI usage
 
 ```bash
-poetry run python transcribe.py audio/file.mp4
-poetry run python transcribe.py audio/file.mp4 -o transcripts/file.md
-poetry run python transcribe.py audio/file.mp4 --force
+python transcribe.py audio/file.mp4
+python transcribe.py audio/file.mp4 -o transcripts/file.md
+python transcribe.py audio/file.mp4 --force
 ```
 
 Behavior:

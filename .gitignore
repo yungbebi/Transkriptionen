@@ -2,3 +2,8 @@ __pycache__/
 .venv/
 *.srt
 *.json
+.env
+audio/**
+!audio/.gitkeep
+transcripts/**
+!transcripts/.gitkeep

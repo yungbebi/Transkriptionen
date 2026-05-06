@@ -6,10 +6,12 @@ authors = []
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.10"
 torch = ">=2,<3"
 torchaudio = ">=2,<3"
 whisperx = ">=3,<4"
+flask = "^3.0"
+ffmpeg-python = "^0.2"
 
 [build-system]
 requires = ["poetry-core"]
