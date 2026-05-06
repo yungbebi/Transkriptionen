@@ -1,4 +1,4 @@
-.PHONY: help setup install run clean kill
+.PHONY: help setup install run clean kill transcribe
 
 PYTHON := .venv/bin/python
 PIP    := .venv/bin/pip
@@ -6,11 +6,12 @@ PORT   := 8000
 
 help:
 	@echo "📝 Transkriptionen"
-	@echo "  make setup    - Create Python 3.12 venv"
-	@echo "  make install  - Install dependencies"
-	@echo "  make run      - Start the web UI"
-	@echo "  make clean    - Remove venv and transcripts"
-	@echo "  make kill     - Kill process on port $(PORT)"
+	@echo "  make setup        - Create Python 3.12 venv"
+	@echo "  make install      - Install dependencies"
+	@echo "  make run          - Start the web UI"
+	@echo "  make transcribe FILE=audio/file.m4a - Transcribe with defaults (--diarize --max-speakers 2)"
+	@echo "  make clean        - Remove venv and transcripts"
+	@echo "  make kill         - Kill process on port $(PORT)"
 
 setup:
 	@echo "🔧 Creating venv..."
@@ -51,3 +52,8 @@ clean:
 
 .venv:
 	python3.12 -m venv .venv
+
+transcribe:
+	@test -n "$(FILE)" || (echo "❌ Usage: make transcribe FILE=audio/your_file.m4a"; exit 1)
+	@echo "🎙️  Transcribing $(FILE)..."
+	@source .env && $(PYTHON) transcribe.py --diarize --max-speakers 2 "$(FILE)"
