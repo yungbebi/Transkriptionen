@@ -38,11 +38,7 @@ install:
 run: kill
 	@echo "🚀 Starting..."
 	@(sleep 2 && open "http://127.0.0.1:$(PORT)") &
-	@$(PYTHON) -W ignore app.py 2>&1 | grep --line-buffered -v \
-		-e "WARNING" -e "UserWarning" -e "FutureWarning" \
-		-e "site-packages" -e "torchcodec" -e "Lightning" \
-		-e "GET /" -e "POST /" -e "^$$" \
-		|| true
+	@$(PYTHON) -W ignore app.py --no-diarize 2>&1 | cat
 
 kill:
 	@lsof -ti:$(PORT) | xargs kill -9 2>/dev/null || true
